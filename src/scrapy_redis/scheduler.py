@@ -36,6 +36,7 @@ class Scheduler(object):
                  flush_on_start=False,
                  queue_key=defaults.SCHEDULER_QUEUE_KEY,
                  queue_cls=defaults.SCHEDULER_QUEUE_CLASS,
+                 queue_length_key=defaults.SCHEDULER_QUEUE_LENGTH_KEY,
                  dupefilter_key=defaults.SCHEDULER_DUPEFILTER_KEY,
                  dupefilter_cls=defaults.SCHEDULER_DUPEFILTER_CLASS,
                  idle_before_close=0,
@@ -70,6 +71,7 @@ class Scheduler(object):
         self.flush_on_start = flush_on_start
         self.queue_key = queue_key
         self.queue_cls = queue_cls
+        self.queue_length_key = queue_length_key
         self.dupefilter_cls = dupefilter_cls
         self.dupefilter_key = dupefilter_key
         self.idle_before_close = idle_before_close
@@ -93,6 +95,7 @@ class Scheduler(object):
             # specific to scrapy-redis.
             'queue_key': 'SCHEDULER_QUEUE_KEY',
             'queue_cls': 'SCHEDULER_QUEUE_CLASS',
+            'queue_length_key': 'SCHEDULER_QUEUE_LENGTH_KEY',
             'dupefilter_key': 'SCHEDULER_DUPEFILTER_KEY',
             # We use the default setting name to keep compatibility.
             'dupefilter_cls': 'DUPEFILTER_CLASS',
@@ -128,6 +131,7 @@ class Scheduler(object):
                 server=self.server,
                 spider=spider,
                 key=self.queue_key % {'spider': spider.name},
+                length_key=self.queue_length_key % {'spider': spider.name},
                 serializer=self.serializer,
             )
         except TypeError as e:
@@ -160,7 +164,11 @@ class Scheduler(object):
 
     def next_request(self):
         block_pop_timeout = self.idle_before_close
-        request = self.queue.pop(block_pop_timeout)
+
+        crawl_id = None
+        if callable(self.spider.next_request_crawl_id_callback):
+            crawl_id = self.spider.next_request_crawl_id_callback()
+        request = self.queue.pop(crawl_id, block_pop_timeout)
         if request and self.stats:
             self.stats.inc_value('scheduler/dequeued/redis', spider=self.spider)
         return request

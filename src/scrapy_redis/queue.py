@@ -1,3 +1,5 @@
+from redis import WatchError
+
 try:
     from scrapy.utils.request import request_from_dict
 except ImportError:
@@ -9,7 +11,7 @@ from . import picklecompat
 class Base(object):
     """Per-spider base queue class"""
 
-    def __init__(self, server, spider, key, serializer=None):
+    def __init__(self, server, spider, key, length_key, serializer=None):
         """Initialize per-spider redis queue.
 
         Parameters
@@ -36,6 +38,7 @@ class Base(object):
         self.server = server
         self.spider = spider
         self.key = key % {'spider': spider.name}
+        self.length_key = length_key % {'spider': spider.name}
         self.serializer = serializer
 
     def _encode_request(self, request):
@@ -53,13 +56,14 @@ class Base(object):
 
     def __len__(self):
         """Return the length of the queue"""
-        raise NotImplementedError
+        count = self.server.get(self.length_key)
+        return int(count) if count else 0
 
     def push(self, request):
         """Push a request"""
         raise NotImplementedError
 
-    def pop(self, timeout=0):
+    def pop(self, queue_key, timeout=0):
         """Pop a request"""
         raise NotImplementedError
 
@@ -67,36 +71,53 @@ class Base(object):
         """Clear queue/stack"""
         self.server.delete(self.key)
 
+    def enqueue_key(self, request):
+        """Return a key to identify the queue"""
+
+        crawl_id = request.meta.get('crawl_id', None)
+        return f"{self.key}:{crawl_id}"
+    
+    def dequeue_key(self, crawl_id):
+        """Return a key to identify the queue"""
+        return f"{self.key}:{crawl_id}"
+    
+    def reconcile_queue_length(self):
+        lua_script = f"""
+            local total_count = 0
+            local keys = redis.call('KEYS', '{self.key}:*')
+            for _, key in ipairs(keys) do
+                total_count = total_count + redis.call('ZCARD', key)
+            end
+            redis.call('SET', '{self.length_key}', total_count)
+            return total_count
+        """
+
+        total_count = self.server.eval(lua_script, 0) 
+        return total_count
 
 class FifoQueue(Base):
     """Per-spider FIFO queue"""
 
-    def __len__(self):
-        """Return the length of the queue"""
-        return self.server.llen(self.key)
-
     def push(self, request):
         """Push a request"""
-        self.server.lpush(self.key, self._encode_request(request))
+        raise NotImplementedError
+        self.server.lpush(self.enqueue_key(request), self._encode_request(request))
 
-    def pop(self, timeout=0):
+    def pop(self, queue_key, timeout=0):
         """Pop a request"""
+        raise NotImplementedError        
         if timeout > 0:
-            data = self.server.brpop(self.key, timeout)
+            data = self.server.brpop(queue_key, timeout)
             if isinstance(data, tuple):
                 data = data[1]
         else:
-            data = self.server.rpop(self.key)
+            data = self.server.rpop(queue_key)
         if data:
             return self._decode_request(data)
 
 
 class PriorityQueue(Base):
     """Per-spider priority queue abstraction using redis' sorted set"""
-
-    def __len__(self):
-        """Return the length of the queue"""
-        return self.server.zcard(self.key)
 
     def push(self, request):
         """Push a request"""
@@ -105,41 +126,70 @@ class PriorityQueue(Base):
         # We don't use zadd method as the order of arguments change depending on
         # whether the class is Redis or StrictRedis, and the option of using
         # kwargs only accepts strings, not bytes.
-        self.server.execute_command('ZADD', self.key, score, data)
 
-    def pop(self, timeout=0):
+        with self.server.pipeline() as pipe:
+            while True:
+                try:
+                    pipe.watch(self.length_key)
+                    pipe.multi()
+                    pipe.zadd(self.enqueue_key(request), {data: score})
+                    pipe.incr(self.length_key)
+                    pipe.execute()
+                    break
+                except WatchError:
+                    continue
+
+    def pop(self, crawl_id, timeout=0):
         """
         Pop a request
         timeout not support in this queue class
         """
         # use atomic range/remove using multi/exec
-        pipe = self.server.pipeline()
-        pipe.multi()
-        pipe.zrange(self.key, 0, 0).zremrangebyrank(self.key, 0, 0)
-        results, count = pipe.execute()
-        if results:
-            return self._decode_request(results[0])
+
+        queue_key = self.dequeue_key(crawl_id)
+        
+        with self.server.pipeline() as pipe:
+            while True:
+                try:
+                    pipe.watch(queue_key)
+                    # Begin the transaction
+                    pipe.multi()
+                    # Get the first item in the zset and remove it atomically
+                    pipe.zrange(queue_key, 0, 0)
+                    pipe.zremrangebyrank(queue_key, 0, 0)
+                    results, removed = pipe.execute()[:2]
+                    
+                    # If an item was removed, decrement the length key
+                    if removed:
+                        self.server.decr(self.length_key)
+                    
+                    # If we got a result, return the decoded request
+                    if results:
+                        return self._decode_request(results[0])
+                    
+                    return None  # No item was popped
+                except WatchError:
+                    continue
+
 
 
 class LifoQueue(Base):
     """Per-spider LIFO queue."""
 
-    def __len__(self):
-        """Return the length of the stack"""
-        return self.server.llen(self.key)
-
     def push(self, request):
         """Push a request"""
-        self.server.lpush(self.key, self._encode_request(request))
+        raise NotImplementedError        
+        self.server.lpush(self.enqueue_key(request), self._encode_request(request))
 
-    def pop(self, timeout=0):
+    def pop(self, queue_key, timeout=0):
         """Pop a request"""
+        raise NotImplementedError        
         if timeout > 0:
-            data = self.server.blpop(self.key, timeout)
+            data = self.server.blpop(queue_key, timeout)
             if isinstance(data, tuple):
                 data = data[1]
         else:
-            data = self.server.lpop(self.key)
+            data = self.server.lpop(queue_key)
 
         if data:
             return self._decode_request(data)
