@@ -81,6 +81,34 @@ class Base(object):
         """Return a key to identify the queue"""
         return f"{self.key}:{crawl_id}"
     
+
+    def queues_lengths(self):
+        lua_script = """
+            local lengths = {}
+            for i, key in ipairs(KEYS) do
+                lengths[#lengths+1] = redis.call('ZCARD', key)
+            end
+            return lengths
+            """
+
+        # Use scan_iter to get the keys safely without blocking the server
+        keys = [key for key in self.server.scan_iter(f"{self.key}:*")]
+
+        # You may want to process these in batches if there are a lot of keys
+        batch_size = 1000  # Number of keys to process in each batch
+        queues_lengths = {}
+
+        for i in range(0, len(keys), batch_size):
+            batch_keys = keys[i:i+batch_size]
+            lengths = self.server.eval(lua_script, len(batch_keys), *batch_keys)
+            queues_lengths.update(dict(zip(batch_keys, lengths)))
+
+        # At this point, queue_lengths contains all your queues and their sizes
+
+        queues_lengths = {k.decode('utf-8'): v for k, v in queues_lengths.items()}
+        return queues_lengths
+
+
     def reconcile_queue_length(self):
         lua_script = f"""
             local total_count = 0
