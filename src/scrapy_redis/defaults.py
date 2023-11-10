@@ -30,3 +30,21 @@ START_URLS_KEY = '%(name)s:start_urls'
 START_URLS_AS_SET = False
 START_URLS_AS_ZSET = False
 MAX_IDLE_TIME = 0
+
+import time
+from functools import wraps
+import logging
+
+logger = logging.getLogger(__name__)
+
+def timeit(method):
+    @wraps(method)
+    def timed(*args, **kw):
+        start_time = time.time()
+        result = method(*args, **kw)
+        end_time = time.time()
+        
+        logger.info(f'{method.__name__} took {(end_time - start_time) * 1000} ms')
+        return result
+    
+    return timed

@@ -8,6 +8,7 @@ import time
 
 from . import connection, defaults
 from .utils import bytes_to_str, is_dict
+#from .defaults import timeit
 
 
 class RedisMixin(object):
@@ -98,6 +99,7 @@ class RedisMixin(object):
         # that's when we will schedule new requests from redis queue
         crawler.signals.connect(self.spider_idle, signal=signals.spider_idle)
 
+    #@timeit
     def pop_list_queue(self, redis_key, batch_size):
         with self.server.pipeline() as pipe:
             pipe.lrange(redis_key, 0, batch_size - 1)
@@ -105,6 +107,7 @@ class RedisMixin(object):
             datas, _ = pipe.execute()
         return datas
 
+    #@timeit
     def pop_priority_queue(self, redis_key, batch_size):
         with self.server.pipeline() as pipe:
             pipe.zrevrange(redis_key, 0, batch_size - 1)
@@ -134,6 +137,7 @@ class RedisMixin(object):
         if found:
             self.logger.debug(f"Read {found} requests from '{self.redis_key}'")
 
+    #@timeit
     def make_request_from_data(self, data):
         """
         Returns a `Request` instance for data coming from Redis.
@@ -186,12 +190,14 @@ class RedisMixin(object):
 
         return FormRequest(url, dont_filter=True, method=method, formdata=parameter, meta=metadata)
 
+    #@timeit
     def schedule_next_requests(self):
         """Schedules a request if available"""
         # TODO: While there is capacity, schedule a batch of redis requests.
         for req in self.next_requests():
             self.crawler.engine.crawl(req, spider=self)
 
+    #@timeit 
     def spider_idle(self):
         """
         Schedules a request if available, otherwise waits.

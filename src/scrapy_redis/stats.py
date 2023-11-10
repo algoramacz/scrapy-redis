@@ -4,6 +4,7 @@ from .defaults import STATS_KEY, SCHEDULER_PERSIST
 from datetime import datetime
 
 from .utils import convert_bytes_to_str
+#from .defaults import timeit
 
 
 class RedisStatsCollector(StatsCollector):
@@ -60,6 +61,7 @@ class RedisStatsCollector(StatsCollector):
         """Set all the hash stats"""
         self.server.hmset(self._get_key(spider), stats)
 
+    #@timeit
     def inc_value(self, key, count=1, start=0, spider=None):
         """Set increment of value according to key"""
         if not self.server.hexists(self._get_key(spider), key):

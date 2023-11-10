@@ -1,4 +1,7 @@
+import threading
+import time
 from redis import WatchError
+import atexit
 
 try:
     from scrapy.utils.request import request_from_dict
@@ -6,12 +9,18 @@ except ImportError:
     from scrapy.utils.reqser import request_to_dict, request_from_dict
 
 from . import picklecompat
-
+#from .defaults import timeit
 
 class Base(object):
     """Per-spider base queue class"""
 
-    def __init__(self, server, spider, key, length_key, serializer=None):
+    def __init__(self, server, 
+                       spider, 
+                       key, 
+                       length_key, 
+                       serializer=None,
+                       push_buffer_size=100,
+                       push_flush_interval=2):
         """Initialize per-spider redis queue.
 
         Parameters
@@ -41,6 +50,16 @@ class Base(object):
         self.length_key = length_key % {'spider': spider.name}
         self.serializer = serializer
 
+        self.push_buffer_size = push_buffer_size
+        self.push_flush_interval = push_flush_interval
+        self.push_buffer = []
+        self.push_running = True
+        self.push_buffer_lock = threading.Lock()    
+        self.push_flush_thread = threading.Thread(target=self.flush_push_buffer_periodically, daemon=True)
+        self.push_flush_thread.start()
+
+        atexit.register(self.shutdown)
+
     def _encode_request(self, request):
         """Encode a request object"""
         try:
@@ -66,6 +85,14 @@ class Base(object):
     def pop(self, queue_key, timeout=0):
         """Pop a request"""
         raise NotImplementedError
+    
+    def flush_push_buffer(self):
+        raise NotImplementedError
+    
+    def flush_push_buffer_periodically(self):
+        while self.push_running:
+            time.sleep(self.push_flush_interval)
+            self.flush_push_buffer()
 
     def clear(self):
         """Clear queue/stack"""
@@ -82,6 +109,14 @@ class Base(object):
         return f"{self.key}:{crawl_id}"
     
 
+    def shutdown(self):
+        """Handle the shutdown process."""
+        self.push_running = False
+        self.push_flush_thread.join()
+        self.flush_push_buffer()
+
+
+    #@timeit
     def queues_lengths(self):
         lua_script = """
             local lengths = {}
@@ -123,30 +158,10 @@ class Base(object):
         total_count = self.server.eval(lua_script, 0) 
         return total_count
 
-class FifoQueue(Base):
-    """Per-spider FIFO queue"""
-
-    def push(self, request):
-        """Push a request"""
-        raise NotImplementedError
-        self.server.lpush(self.enqueue_key(request), self._encode_request(request))
-
-    def pop(self, queue_key, timeout=0):
-        """Pop a request"""
-        raise NotImplementedError        
-        if timeout > 0:
-            data = self.server.brpop(queue_key, timeout)
-            if isinstance(data, tuple):
-                data = data[1]
-        else:
-            data = self.server.rpop(queue_key)
-        if data:
-            return self._decode_request(data)
-
-
 class PriorityQueue(Base):
     """Per-spider priority queue abstraction using redis' sorted set"""
 
+    #@timeit
     def push(self, request):
         """Push a request"""
         data = self._encode_request(request)
@@ -155,18 +170,49 @@ class PriorityQueue(Base):
         # whether the class is Redis or StrictRedis, and the option of using
         # kwargs only accepts strings, not bytes.
 
-        with self.server.pipeline() as pipe:
-            while True:
-                try:
-                    pipe.watch(self.length_key)
-                    pipe.multi()
-                    pipe.zadd(self.enqueue_key(request), {data: score})
-                    pipe.incr(self.length_key)
-                    pipe.execute()
-                    break
-                except WatchError:
-                    continue
+        with self.push_buffer_lock:
+            self.push_buffer.append((self.enqueue_key(request), {data: score}))
 
+            # if len(self.push_buffer) >= self.push_buffer_size:
+            #     self.flush_push_buffer()
+
+        # with self.server.pipeline() as pipe:
+        #     while True:
+        #         try:
+        #             pipe.watch(self.length_key)
+        #             pipe.multi()
+        #             pipe.zadd(self.enqueue_key(request), {data: score})
+        #             pipe.incr(self.length_key)
+        #             pipe.execute()
+        #             break
+        #         except WatchError:
+        #             continue
+
+    #@timeit 
+    def flush_push_buffer(self):
+        """Flush the push buffer to Redis"""
+        with self.push_buffer_lock:
+            if not self.push_buffer:
+                return
+
+            with self.server.pipeline() as pipe:
+                while True:
+                    try:
+                        pipe.watch(self.length_key)
+                        pipe.multi()
+                        for key, data in self.push_buffer:
+                            pipe.zadd(key, data)
+                        pipe.incrby(self.length_key, len(self.push_buffer))
+                        pipe.execute()
+                        break
+                    except WatchError:
+                        continue
+
+            self.push_buffer = []
+
+
+
+    #@timeit
     def pop(self, crawl_id, timeout=0):
         """
         Pop a request
@@ -199,7 +245,25 @@ class PriorityQueue(Base):
                 except WatchError:
                     continue
 
+class FifoQueue(Base):
+    """Per-spider FIFO queue"""
 
+    def push(self, request):
+        """Push a request"""
+        raise NotImplementedError
+        self.server.lpush(self.enqueue_key(request), self._encode_request(request))
+
+    def pop(self, queue_key, timeout=0):
+        """Pop a request"""
+        raise NotImplementedError        
+        if timeout > 0:
+            data = self.server.brpop(queue_key, timeout)
+            if isinstance(data, tuple):
+                data = data[1]
+        else:
+            data = self.server.rpop(queue_key)
+        if data:
+            return self._decode_request(data)
 
 class LifoQueue(Base):
     """Per-spider LIFO queue."""

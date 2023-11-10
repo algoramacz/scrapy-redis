@@ -4,6 +4,7 @@ import six
 from scrapy.utils.misc import load_object
 
 from . import connection, defaults
+#from .defaults import timeit
 
 
 # TODO: add SCRAPY_JOB support.
@@ -139,6 +140,9 @@ class Scheduler(object):
 
         self.df = load_object(self.dupefilter_cls).from_spider(spider)
 
+        # make sure total len corresponds to queue lengths 
+        self.queue.reconcile_queue_length()
+
         if self.flush_on_start:
             self.flush()
         # notice if there are requests already in the queue to resume the crawl
@@ -153,6 +157,7 @@ class Scheduler(object):
         self.df.clear()
         self.queue.clear()
 
+    #@timeit
     def enqueue_request(self, request):
         if not request.dont_filter and self.df.request_seen(request):
             self.df.log(request, self.spider)
@@ -162,6 +167,7 @@ class Scheduler(object):
         self.queue.push(request)
         return True
 
+    #@timeit
     def next_request(self):
         block_pop_timeout = self.idle_before_close
 
@@ -173,5 +179,6 @@ class Scheduler(object):
             self.stats.inc_value('scheduler/dequeued/redis', spider=self.spider)
         return request
 
+    #@timeit
     def has_pending_requests(self):
         return len(self) > 0
