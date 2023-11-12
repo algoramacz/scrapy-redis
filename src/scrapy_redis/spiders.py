@@ -195,7 +195,7 @@ class RedisMixin(object):
         """Schedules a request if available"""
         # TODO: While there is capacity, schedule a batch of redis requests.
         for req in self.next_requests():
-            self.crawler.engine.crawl(req, spider=self)
+            self.crawler.engine.crawl(req)
 
     #@timeit 
     def spider_idle(self):
