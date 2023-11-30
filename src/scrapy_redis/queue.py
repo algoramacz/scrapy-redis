@@ -94,9 +94,13 @@ class Base(object):
             time.sleep(self.push_flush_interval)
             self.flush_push_buffer()
 
-    def clear(self):
+    def clear(self, crawl_id):
         """Clear queue/stack"""
-        self.server.delete(self.key)
+        if crawl_id is None:
+            return False
+        
+        self.server.delete(self.dequeue_key(crawl_id))
+        return True
 
     def enqueue_key(self, request):
         """Return a key to identify the queue"""

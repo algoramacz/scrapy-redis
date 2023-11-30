@@ -154,6 +154,7 @@ class Scheduler(object):
             self.flush()
 
     def flush(self):
+        # TODO - add crawl_id
         self.df.clear()
         self.queue.clear()
 
