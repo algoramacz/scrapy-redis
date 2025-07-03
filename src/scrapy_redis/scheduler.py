@@ -1,3 +1,5 @@
+from typing import Callable
+
 import importlib
 import six
 
@@ -27,21 +29,19 @@ class Scheduler(object):
         Scheduler dupefilter redis key.
     SCHEDULER_DUPEFILTER_CLASS : str
         Scheduler dupefilter class.
-    SCHEDULER_SERIALIZER : str
-        Scheduler serializer.
 
     """
 
     def __init__(self, server,
                  persist=False,
                  flush_on_start=False,
+                 requests_key=defaults.SCHEDULER_REQUESTS_KEY,
                  queue_key=defaults.SCHEDULER_QUEUE_KEY,
                  queue_cls=defaults.SCHEDULER_QUEUE_CLASS,
                  queue_length_key=defaults.SCHEDULER_QUEUE_LENGTH_KEY,
                  dupefilter_key=defaults.SCHEDULER_DUPEFILTER_KEY,
                  dupefilter_cls=defaults.SCHEDULER_DUPEFILTER_CLASS,
-                 idle_before_close=0,
-                 serializer=None):
+                 idle_before_close=0):
         """Initialize scheduler.
 
         Parameters
@@ -70,13 +70,14 @@ class Scheduler(object):
         self.server = server
         self.persist = persist
         self.flush_on_start = flush_on_start
+        self.requests_key = requests_key
         self.queue_key = queue_key
         self.queue_cls = queue_cls
         self.queue_length_key = queue_length_key
         self.dupefilter_cls = dupefilter_cls
         self.dupefilter_key = dupefilter_key
         self.idle_before_close = idle_before_close
-        self.serializer = serializer
+        self.request_fingerprint: Callable = None
         self.stats = None
 
     def __len__(self):
@@ -94,22 +95,18 @@ class Scheduler(object):
         optional = {
             # TODO: Use custom prefixes for this settings to note that are
             # specific to scrapy-redis.
-            'queue_key': 'SCHEDULER_QUEUE_KEY',
             'queue_cls': 'SCHEDULER_QUEUE_CLASS',
+            'requests_key': 'SCHEDULER_REQUESTS_KEY',
+            'queue_key': 'SCHEDULER_QUEUE_KEY',
             'queue_length_key': 'SCHEDULER_QUEUE_LENGTH_KEY',
             'dupefilter_key': 'SCHEDULER_DUPEFILTER_KEY',
             # We use the default setting name to keep compatibility.
             'dupefilter_cls': 'DUPEFILTER_CLASS',
-            'serializer': 'SCHEDULER_SERIALIZER',
         }
         for name, setting_name in optional.items():
             val = settings.get(setting_name)
             if val:
                 kwargs[name] = val
-
-        # Support serializer as a path to a module.
-        if isinstance(kwargs.get('serializer'), six.string_types):
-            kwargs['serializer'] = importlib.import_module(kwargs['serializer'])
 
         server = connection.from_settings(settings)
         # Ensure the connection is working.
@@ -127,18 +124,18 @@ class Scheduler(object):
     def open(self, spider):
         self.spider = spider
 
+        self.df = load_object(self.dupefilter_cls).from_spider(spider)
+        self.request_fingerprint = self.df.request_fingerprint
+
         try:
             self.queue = load_object(self.queue_cls)(
                 server=self.server,
                 spider=spider,
-                key=self.queue_key % {'spider': spider.name},
-                length_key=self.queue_length_key % {'spider': spider.name},
-                serializer=self.serializer,
+                request_fingerprint=self.request_fingerprint,
             )
         except TypeError as e:
             raise ValueError(f"Failed to instantiate queue class '{self.queue_cls}': {e}")
 
-        self.df = load_object(self.dupefilter_cls).from_spider(spider)
 
         # make sure total len corresponds to queue lengths 
         self.queue.reconcile_queue_length()

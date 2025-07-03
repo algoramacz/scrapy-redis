@@ -19,10 +19,10 @@ REDIS_PARAMS = {
 }
 REDIS_CONCURRENT_REQUESTS = 16
 
-#SCHEDULER_QUEUE_KEY = '%(spider)s:requests'
-SCHEDULER_QUEUE_KEY = '%(spider)s:requests'
 SCHEDULER_QUEUE_CLASS = 'scrapy_redis.queue.PriorityQueue'
-SCHEDULER_QUEUE_LENGTH_KEY = '%(spider)s:queue_length'
+SCHEDULER_REQUESTS_KEY = None
+SCHEDULER_QUEUE_KEY = None
+SCHEDULER_QUEUE_LENGTH_KEY = None
 SCHEDULER_DUPEFILTER_KEY = '%(spider)s:dupefilter'
 SCHEDULER_DUPEFILTER_CLASS = 'scrapy_redis.dupefilter.RFPDupeFilter'
 SCHEDULER_PERSIST = False
