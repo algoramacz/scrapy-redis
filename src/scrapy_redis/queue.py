@@ -161,7 +161,16 @@ class Base(object):
         # At this point, queue_lengths contains all your queues and their sizes
 
         queues_lengths = {k.decode("utf-8"): v for k, v in queues_lengths.items()}
-        return queues_lengths
+
+        crawl_id_lengths = {}
+        for k, v in queues_lengths.items():
+            crawl_id = k.split(":")[-1]  # Extract crawl_id from the key
+            if crawl_id not in crawl_id_lengths:
+                crawl_id_lengths[crawl_id] = 0
+            crawl_id_lengths[crawl_id] += v
+
+        return crawl_id_lengths
+
 
     def reconcile_queue_length(self):
         lua_script = f"""
