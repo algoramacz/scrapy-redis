@@ -137,7 +137,7 @@ class Base(object):
         self.flush_buffers()
 
     # @timeit
-    def queues_lengths(self):
+    def pending_queues_lengths(self):
         lua_script = """
             local lengths = {}
             for i, key in ipairs(KEYS) do
@@ -147,7 +147,7 @@ class Base(object):
             """
 
         # Use scan_iter to get the keys safely without blocking the server
-        keys = [key for key in self.server.scan_iter(f"{self.queue_key}:*")]
+        keys = [key for key in self.server.scan_iter(f"{self.queue_key}:pending:*")]
 
         # You may want to process these in batches if there are a lot of keys
         batch_size = 1000  # Number of keys to process in each batch
