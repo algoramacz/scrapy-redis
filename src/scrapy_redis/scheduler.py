@@ -33,8 +33,6 @@ class Scheduler(object):
     """
 
     def __init__(self, server,
-                 persist=False,
-                 flush_on_start=False,
                  requests_key=defaults.SCHEDULER_REQUESTS_KEY,
                  queue_key=defaults.SCHEDULER_QUEUE_KEY,
                  queue_cls=defaults.SCHEDULER_QUEUE_CLASS,
@@ -48,10 +46,6 @@ class Scheduler(object):
         ----------
         server : Redis
             The redis server instance.
-        persist : bool
-            Whether to flush requests when closing. Default is False.
-        flush_on_start : bool
-            Whether to flush requests on start. Default is False.
         queue_key : str
             Requests queue key.
         queue_cls : str
@@ -68,8 +62,6 @@ class Scheduler(object):
             raise TypeError("idle_before_close cannot be negative")
 
         self.server = server
-        self.persist = persist
-        self.flush_on_start = flush_on_start
         self.requests_key = requests_key
         self.queue_key = queue_key
         self.queue_cls = queue_cls
@@ -86,8 +78,6 @@ class Scheduler(object):
     @classmethod
     def from_settings(cls, settings):
         kwargs = {
-            'persist': settings.getbool('SCHEDULER_PERSIST'),
-            'flush_on_start': settings.getbool('SCHEDULER_FLUSH_ON_START'),
             'idle_before_close': settings.getint('SCHEDULER_IDLE_BEFORE_CLOSE'),
         }
 
@@ -140,20 +130,15 @@ class Scheduler(object):
         # make sure total len corresponds to queue lengths 
         self.queue.reconcile_queue_length()
 
-        if self.flush_on_start:
-            self.flush()
         # notice if there are requests already in the queue to resume the crawl
         if len(self.queue):
             spider.log(f"Resuming crawl ({len(self.queue)} requests scheduled)")
 
     def close(self, reason):
-        if not self.persist:
-            self.flush()
+        self.flush()
 
     def flush(self):
-        # TODO - add crawl_id
-        self.df.clear()
-        self.queue.clear()
+        self.queue.flush_buffers()
 
     #@timeit
     def enqueue_request(self, request):
